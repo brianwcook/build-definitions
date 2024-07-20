@@ -50,10 +50,16 @@ spec:
       value: $(workspaces.netrc.bound)
     - name: WORKSPACE_NETRC_PATH
       value: $(workspaces.netrc.path)
+    - name: ACTIVATION_KEY
+      default: activation-key
+      description: Name of secret which contains subscription activation key
+      type: string
     volumeMounts:
       - name: trusted-ca
         mountPath: /mnt/trusted-ca
         readOnly: true
+      - mountPath: /activation-key
+        name: activation-key
     script: |
       if [ -z "${INPUT}" ]
       then
@@ -97,6 +103,16 @@ spec:
         update-ca-trust
       fi
 
+      ACTIVATION_KEY_PATH="/activation-key"
+         if [ -d "$ACTIVATION_KEY_PATH" ]; then
+          # cp -r --preserve=mode "$ACTIVATION_KEY_PATH" /tmp/activation-key
+          # VOLUME_MOUNTS="${VOLUME_MOUNTS} --volume /tmp/activation-key:/activation-key"
+          # echo "Adding activation key to the build"
+          subscription-manager register \
+            --org $(cat "/activation-key/org") \
+            --activationkey $(cat "/activation-key/activationkey")
+        fi
+
       cachi2 --log-level="$LOG_LEVEL" fetch-deps \
       $dev_pacman_flag \
       --source=$(workspaces.source.path)/source \
@@ -126,6 +142,10 @@ spec:
       performing http(s) requests.
     optional: true
   volumes:
+    - name: activation-key
+      secret:
+        optional: true
+        secretName: $(params.ACTIVATION_KEY)
     - name: trusted-ca
       configMap:
         name: $(params.caTrustConfigMapName)
