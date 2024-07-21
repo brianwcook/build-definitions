@@ -178,14 +178,13 @@ spec:
         fi
 
         ACTIVATION_KEY_PATH="/activation-key"
-           ls -al /activation-key
-
            if [ -d "$ACTIVATION_KEY_PATH" ]; then
             # cp -r --preserve=mode "$ACTIVATION_KEY_PATH" /tmp/activation-key
             # VOLUME_MOUNTS="${VOLUME_MOUNTS} --volume /tmp/activation-key:/activation-key"
             # echo "Adding activation key to the build"
-            subscription-manager register \
-              --org $(cat "/activation-key/org") \
+            subscription-manager register
+              # todo: this should just be org, not orgid
+              --org $(cat "/activation-key/orgid") \
               --activationkey $(cat "/activation-key/activationkey")
         fi
 
