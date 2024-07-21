@@ -178,6 +178,9 @@ spec:
         fi
 
         ACTIVATION_KEY_PATH="/activation-key"
+           ls -al /
+           mount
+
            if [ -d "$ACTIVATION_KEY_PATH" ]; then
             # cp -r --preserve=mode "$ACTIVATION_KEY_PATH" /tmp/activation-key
             # VOLUME_MOUNTS="${VOLUME_MOUNTS} --volume /tmp/activation-key:/activation-key"
