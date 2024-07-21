@@ -30,6 +30,10 @@ spec:
     type: string
     description: The name of the key in the ConfigMap that contains the CA bundle data.
     default: ca-bundle.crt
+  - name: ACTIVATION_KEY
+    default: activation-key
+    description: Name of secret which contains subscription activation key
+    type: string
   steps:
   - image: quay.io/bcook/cachi2:latest
     # per https://kubernetes.io/docs/concepts/containers/images/#imagepullpolicy-defaulting
@@ -50,10 +54,6 @@ spec:
       value: $(workspaces.netrc.bound)
     - name: WORKSPACE_NETRC_PATH
       value: $(workspaces.netrc.path)
-    - name: ACTIVATION_KEY
-      default: activation-key
-      description: Name of secret which contains subscription activation key
-      type: string
     volumeMounts:
       - name: trusted-ca
         mountPath: /mnt/trusted-ca
