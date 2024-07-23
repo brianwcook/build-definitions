@@ -116,8 +116,8 @@ spec:
 
           # detect entitlement certs and setup environment variables
           RHSM_ID=$(ls /etc/pki/entitlement/ | grep key | cut -d - -f 1)
-          C2_CLIENT_CERT="/etc/pki/entitlement/$RHSM_ID.pem"
-          C2_CLIENT_KEY="/etc/pki/entitlement/$RHSM_ID-key.pem"
+          export C2_CLIENT_CERT="/etc/pki/entitlement/$RHSM_ID.pem"
+          export C2_CLIENT_KEY="/etc/pki/entitlement/$RHSM_ID-key.pem"
           echo "Using client certificate $C2_CLIENT_CERT and key $C2_CLIENT_KEY."
         fi
 
