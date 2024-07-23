@@ -30,8 +30,12 @@ spec:
     type: string
     description: The name of the key in the ConfigMap that contains the CA bundle data.
     default: ca-bundle.crt
+  - name: ACTIVATION_KEY
+    default: activation-key
+    description: Name of secret which contains subscription activation key
+    type: string
   steps:
-  - image: quay.io/redhat-appstudio/cachi2:0.8.0@sha256:5cf15d6f3fb151a3e12c8a17024062b7cc62b0c3e1b165e4a9fa5bf7a77bdc30
+  - image: quay.io/bcook/cachi2:latest
     # per https://kubernetes.io/docs/concepts/containers/images/#imagepullpolicy-defaulting
     # the cluster will set imagePullPolicy to IfNotPresent
     name: prefetch-dependencies
@@ -54,6 +58,8 @@ spec:
       - name: trusted-ca
         mountPath: /mnt/trusted-ca
         readOnly: true
+      - mountPath: /activation-key
+        name: activation-key
     script: |
       if [ -z "${INPUT}" ]
       then
@@ -97,6 +103,18 @@ spec:
         update-ca-trust
       fi
 
+      ACTIVATION_KEY_PATH="/activation-key"
+      if [ -d "$ACTIVATION_KEY_PATH" ]; then
+          # cp -r --preserve=mode "$ACTIVATION_KEY_PATH" /tmp/activation-key
+          # VOLUME_MOUNTS="${VOLUME_MOUNTS} --volume /tmp/activation-key:/activation-key"
+          # echo "Adding activation key to the build"
+        
+        # todo: make sure orgid kes is consistent with buildah task and docs
+        subscription-manager register \
+            --org $(cat "/activation-key/orgid") \
+            --activationkey $(cat "/activation-key/activationkey")
+        fi
+
       cachi2 --log-level="$LOG_LEVEL" fetch-deps \
       $dev_pacman_flag \
       --source=$(workspaces.source.path)/source \
@@ -126,6 +144,10 @@ spec:
       performing http(s) requests.
     optional: true
   volumes:
+    - name: activation-key
+      secret:
+        optional: true
+        secretName: $(params.ACTIVATION_KEY)
     - name: trusted-ca
       configMap:
         name: $(params.caTrustConfigMapName)

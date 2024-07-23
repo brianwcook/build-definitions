@@ -15,6 +15,10 @@ spec:
     For additional info on Cachi2, see docs at
     https://github.com/containerbuildsystem/cachi2#basic-usage.
   params:
+    - name: ACTIVATION_KEY
+      description: Name of secret which contains subscription activation key
+      type: string
+      default: activation-key
     - name: SOURCE_ARTIFACT
       description: The Trusted Artifact URI pointing to the artifact with
         the application source code.
@@ -56,6 +60,10 @@ spec:
         the application source code.
       type: string
   volumes:
+    - name: activation-key
+      secret:
+        optional: true
+        secretName: $(params.ACTIVATION_KEY)
     - name: trusted-ca
       configMap:
         items:
@@ -100,16 +108,18 @@ spec:
           echo -n "" >$(results.CACHI2_ARTIFACT.path)
         fi
     - name: use-trusted-artifact
-      image: quay.io/redhat-appstudio/build-trusted-artifacts:latest@sha256:bf4bfae950fe31d08f44488bb788bea8800cd6d75f5e09fcc21cf98689c61185
+      image: quay.io/redhat-appstudio/build-trusted-artifacts:latest@sha256:601e0999ae062e5ee666538d651af7893a75e415b7952c85caa8a4452501029a
       args:
         - use
         - $(params.SOURCE_ARTIFACT)=/var/workdir/source
     - name: prefetch-dependencies
-      image: quay.io/redhat-appstudio/cachi2:0.8.0@sha256:5cf15d6f3fb151a3e12c8a17024062b7cc62b0c3e1b165e4a9fa5bf7a77bdc30
+      image: quay.io/bcook/cachi2:latest
       volumeMounts:
         - mountPath: /mnt/trusted-ca
           name: trusted-ca
           readOnly: true
+        - mountPath: /activation-key
+          name: activation-key
       env:
         - name: INPUT
           value: $(params.input)
@@ -167,6 +177,18 @@ spec:
           update-ca-trust
         fi
 
+        ACTIVATION_KEY_PATH="/activation-key"
+        if [ -d "$ACTIVATION_KEY_PATH" ]; then
+            # cp -r --preserve=mode "$ACTIVATION_KEY_PATH" /tmp/activation-key
+            # VOLUME_MOUNTS="${VOLUME_MOUNTS} --volume /tmp/activation-key:/activation-key"
+            # echo "Adding activation key to the build"
+
+          # todo: make sure orgid kes is consistent with buildah task and docs
+          subscription-manager register \
+              --org $(cat "/activation-key/orgid") \
+              --activationkey $(cat "/activation-key/activationkey")
+        fi
+
         cachi2 --log-level="$LOG_LEVEL" fetch-deps \
           $dev_pacman_flag \
           --source=/var/workdir/source \
@@ -181,7 +203,7 @@ spec:
         cachi2 --log-level="$LOG_LEVEL" inject-files /var/workdir/cachi2/output \
           --for-output-dir=/cachi2/output
     - name: create-trusted-artifact
-      image: quay.io/redhat-appstudio/build-trusted-artifacts:latest@sha256:bf4bfae950fe31d08f44488bb788bea8800cd6d75f5e09fcc21cf98689c61185
+      image: quay.io/redhat-appstudio/build-trusted-artifacts:latest@sha256:601e0999ae062e5ee666538d651af7893a75e415b7952c85caa8a4452501029a
       args:
         - create
         - --store
