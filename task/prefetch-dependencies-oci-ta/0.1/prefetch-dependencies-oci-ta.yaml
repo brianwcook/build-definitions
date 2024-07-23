@@ -179,14 +179,21 @@ spec:
 
         ACTIVATION_KEY_PATH="/activation-key"
         if [ -d "$ACTIVATION_KEY_PATH" ]; then
-            # cp -r --preserve=mode "$ACTIVATION_KEY_PATH" /tmp/activation-key
-            # VOLUME_MOUNTS="${VOLUME_MOUNTS} --volume /tmp/activation-key:/activation-key"
-            # echo "Adding activation key to the build"
+            echo "Detected activation key, registering with RHSM."
 
-          # todo: make sure orgid kes is consistent with buildah task and docs
-          subscription-manager register \
+            # todo: make sure orgid key is consistent with buildah task and docs
+            subscription-manager register \
               --org $(cat "/activation-key/orgid") \
               --activationkey $(cat "/activation-key/activationkey")
+
+            # detect entitlement certs and setup environment variables
+            ls /etc/pki/entitlement/
+
+            export RHSM_ID=$(ls /etc/pki/entitlement/ | grep key | cut -d - -f 1)
+            echo $RHSM_ID
+            export C2_CLIENT_CERT="/etc/pki/entitlement/$RHSM_ID.pem"
+            export C2_CLIENT_KEY="/etc/pki/entitlement/$RHSM_ID-key.pem"
+            echo "Using client certificate $C2_CLIENT_CERT and key $C2_CLIENT_KEY."
         fi
 
         cachi2 --log-level="$LOG_LEVEL" fetch-deps \
