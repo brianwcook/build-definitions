@@ -109,10 +109,15 @@ spec:
           # VOLUME_MOUNTS="${VOLUME_MOUNTS} --volume /tmp/activation-key:/activation-key"
           # echo "Adding activation key to the build"
         
-        # todo: make sure orgid kes is consistent with buildah task and docs
-        subscription-manager register \
+          # todo: make sure orgid key is consistent with buildah task and docs
+          subscription-manager register \
             --org $(cat "/activation-key/orgid") \
             --activationkey $(cat "/activation-key/activationkey")
+
+          # detect entitlement certs and setup environment variables
+          RHSM_ID=$(ls /etc/pki/entitlement/ | grep key | cut -d - -f 1)
+          C2_CLIENT_CERT="/etc/pki/entitlement/$RHSM_ID.pem"
+          C2_CLIENT_KEY="/etc/pki/entitlement/$RHSM_ID-key.pem"
         fi
 
       cachi2 --log-level="$LOG_LEVEL" fetch-deps \
