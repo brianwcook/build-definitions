@@ -35,7 +35,7 @@ spec:
     description: Name of secret which contains subscription activation key
     type: string
   steps:
-  - image: quay.io/bcook/cachi2@sha256:844405268a97296443bf8832f47df2bc69591a1370943ddd22649e2db11a7735
+  - image: quay.io/bcook/cachi2@sha256:cd0ee8284eb41838071e7987644fcfe05cef77f89ac426c14a2fa4ed5bd1b5ac
     # per https://kubernetes.io/docs/concepts/containers/images/#imagepullpolicy-defaulting
     # the cluster will set imagePullPolicy to IfNotPresent
     name: prefetch-dependencies
