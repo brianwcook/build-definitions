@@ -113,7 +113,7 @@ spec:
         - use
         - $(params.SOURCE_ARTIFACT)=/var/workdir/source
     - name: prefetch-dependencies
-      image: quay.io/bcook/cachi2:latest
+      image: quay.io/bcook/cachi2:no-rocky
       volumeMounts:
         - mountPath: /mnt/trusted-ca
           name: trusted-ca
