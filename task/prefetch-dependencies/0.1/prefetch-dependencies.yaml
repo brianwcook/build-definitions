@@ -88,10 +88,10 @@ spec:
         echo "false" > /shared/registered
       fi
 
-- name: add-subscription-manager-certs-to-input
-  image: quay.io/bcook/cachi2@sha256:cd0ee8284eb41838071e7987644fcfe05cef77f89ac426c14a2fa4ed5bd1b5ac
-  # per https://kubernetes.io/docs/concepts/containers/images/#imagepullpolicy-defaulting
-  # the cluster will set imagePullPolicy to IfNotPresent
+  - name: preprocess-input
+    image: quay.io/bcook/cachi2@sha256:cd0ee8284eb41838071e7987644fcfe05cef77f89ac426c14a2fa4ed5bd1b5ac
+    # per https://kubernetes.io/docs/concepts/containers/images/#imagepullpolicy-defaulting
+    # the cluster will set imagePullPolicy to IfNotPresent
 
     env:
     - name: INPUT

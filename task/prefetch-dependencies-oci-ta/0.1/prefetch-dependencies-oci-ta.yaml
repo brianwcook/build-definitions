@@ -64,6 +64,10 @@ spec:
       secret:
         optional: true
         secretName: $(params.ACTIVATION_KEY)
+    - name: etc-pki-entitlement
+      emptyDir: {}
+    - name: shared
+      emptyDir: {}
     - name: trusted-ca
       configMap:
         items:
@@ -108,10 +112,140 @@ spec:
           echo -n "" >$(results.CACHI2_ARTIFACT.path)
         fi
     - name: use-trusted-artifact
-      image: quay.io/redhat-appstudio/build-trusted-artifacts:latest@sha256:601e0999ae062e5ee666538d651af7893a75e415b7952c85caa8a4452501029a
+      image: quay.io/redhat-appstudio/build-trusted-artifacts:latest@sha256:81c4864dae6bb11595f657be887e205262e70086a05ed16ada827fd6391926ac
       args:
         - use
         - $(params.SOURCE_ARTIFACT)=/var/workdir/source
+    - name: check-prefetch-input
+      image: quay.io/bcook/cachi2@sha256:cd0ee8284eb41838071e7987644fcfe05cef77f89ac426c14a2fa4ed5bd1b5ac
+      env:
+        - name: INPUT
+          value: $(params.input)
+      script: |
+        if [ -z "${INPUT}" ]; then
+          # Confirm input was provided though it's likely the whole task would be skipped if it wasn't
+          echo "No prefetch will be performed because no input was provided for cachi2 fetch-deps"
+          exit 0
+        fi
+    - name: register-red-hat
+      image: quay.io/bcook/cachi2@sha256:cd0ee8284eb41838071e7987644fcfe05cef77f89ac426c14a2fa4ed5bd1b5ac
+      results:
+        - name: registered
+          type: string
+      volumeMounts:
+        - mountPath: /shared
+          name: shared
+        - mountPath: /activation-key
+          name: activation-key
+      env:
+        - name: INPUT
+          value: $(params.input)
+        - name: ACTIVATION_KEY
+          value: $(params.ACTIVATION_KEY)
+      script: |
+        #!/bin/bash
+        echo "false" >/shared/registered
+        ACTIVATION_KEY_PATH="/activation-key"
+
+        REGISTERED="false"
+        if [ -e /activation-key/org ]; then
+          cp -r --preserve=mode "$ACTIVATION_KEY_PATH" /tmp/activation-key
+          mkdir /shared/rhsm-tmp
+          VOLUME_MOUNTS+=(--volume /tmp/activation-key:/activation-key -v /shared/rhsm-tmp:/etc/pki/entitlement:Z)
+
+          echo "Registering with Red Hat subscription manager."
+          subscription-manager register --org "$(cat /tmp/activation-key/org)" --activationkey "$(cat /tmp/activation-key/activationkey)"
+          REGISTERED=$?
+          # copy generated certificates to /shared/rhsm-tmp
+          cp /etc/pki/entitlement/*.pem /shared/rhsm-tmp
+          echo "true" >/shared/registered
+
+        else
+          echo "false" >/shared/registered
+        fi
+    - name: preprocess-input
+      image: quay.io/bcook/cachi2@sha256:cd0ee8284eb41838071e7987644fcfe05cef77f89ac426c14a2fa4ed5bd1b5ac
+      volumeMounts:
+        - mountPath: /shared
+          name: shared
+      env:
+        - name: INPUT
+          value: $(params.input)
+        - name: ACTIVATION_KEY
+          value: $(params.ACTIVATION_KEY)
+      script: |
+        #!/bin/python3
+        import json
+        import os
+        import sys
+
+        def string_to_json(input: str):
+            if input in ["gomod", "pip", "npm", "yarn", "bundler", "rpm"]:
+                input = '{"type": "%s"}' % input
+                print("json: %s" % input)
+            return input
+
+
+        def json_to_list(input: str):
+            input = json.loads(input)
+            if type(input) is dict:
+                input = [input]
+            return json.dumps(input)
+
+
+        def inject_certs(input: str):
+            input = json.loads(input)
+            if type(input is list):
+                cert = os.getenv("RHT_CERT", None)
+                key = os.getenv("RHT_KEY", None)
+                ca_bundle = os.getenv("CA_BUNDLE", None)
+
+                for pkg_man in input:
+                    if pkg_man["type"] == "rpm":
+
+                        # preserve verify setting
+                        verify = \
+                            pkg_man.get("options", {}).get("ssl", {}).get("verify", 1)
+
+                        # preserve other options
+                        options = pkg_man.get('options', {})
+
+                        ssl_options = {
+                            "client_key": key,
+                            "client_cert": cert,
+                            "ca_bundle": ca_bundle,
+                            "verify": verify}
+
+                        options['ssl'] = ssl_options
+                        pkg_man["options"] = options
+                return (json.dumps(input))
+
+            else:
+                # throw an error
+                print("boooo!")
+
+
+        def convert_input(input):
+            input = string_to_json(input)
+            input = json_to_list(input)
+            input = inject_certs(input)
+            return input
+
+
+        if __name__ == '__main__':
+          f = open("/shared/registered", "r")
+          registered = f.read()
+          if registered == "false":
+              print("System is not registered. Skipping.")
+              sys.exit()
+
+          elif registered == "true":
+              input = sys.argv[1]
+              input = convert_input(input)
+              print(input)
+          else:
+              print("unexpected result for 'registered'.")
+              sys.exit(1)
     - name: prefetch-dependencies
       image: quay.io/bcook/cachi2@sha256:cd0ee8284eb41838071e7987644fcfe05cef77f89ac426c14a2fa4ed5bd1b5ac
       volumeMounts:
@@ -120,6 +254,8 @@ spec:
           readOnly: true
         - mountPath: /activation-key
           name: activation-key
+        - mountPath: /shared
+          name: shared
       env:
         - name: INPUT
           value: $(params.input)
@@ -136,12 +272,6 @@ spec:
         - name: WORKSPACE_NETRC_PATH
           value: $(workspaces.netrc.path)
       script: |
-        if [ -z "${INPUT}" ]; then
-          # Confirm input was provided though it's likely the whole task would be skipped if it wasn't
-          echo "No prefetch will be performed because no input was provided for cachi2 fetch-deps"
-          exit 0
-        fi
-
         if [ "$DEV_PACKAGE_MANAGERS" = "true" ]; then
           dev_pacman_flag=--dev-package-managers
         else
@@ -210,7 +340,7 @@ spec:
         cachi2 --log-level="$LOG_LEVEL" inject-files /var/workdir/cachi2/output \
           --for-output-dir=/cachi2/output
     - name: create-trusted-artifact
-      image: quay.io/redhat-appstudio/build-trusted-artifacts:latest@sha256:601e0999ae062e5ee666538d651af7893a75e415b7952c85caa8a4452501029a
+      image: quay.io/redhat-appstudio/build-trusted-artifacts:latest@sha256:81c4864dae6bb11595f657be887e205262e70086a05ed16ada827fd6391926ac
       args:
         - create
         - --store
