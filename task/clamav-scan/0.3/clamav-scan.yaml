@@ -42,6 +42,8 @@ spec:
       name: TEST_OUTPUT
   steps:
     - env:
+        - name: HOME
+          value: /work
         - name: IMAGE_URL
           value: $(params.image-url)
         - name: IMAGE_DIGEST
@@ -55,6 +57,11 @@ spec:
       # the cluster will set imagePullPolicy to IfNotPresent
       # also per direction from Ralph Bean, we want to use image digest based tags to use a cue to automation like dependabot or renovatebot to periodically submit pull requests that update the digest as new images are released.
       workingDir: /work
+      # need to change user since 'oc image extract' requires more privileges when running as root permissions
+      # https://bugzilla.redhat.com/show_bug.cgi?id=1969929
+      securityContext:
+        capabilities:
+          add: ["SETFCAP"]
       computeResources:
         limits:
           memory: 16Gi
@@ -105,7 +112,7 @@ spec:
 
         # Test if clamd is responsive
         if [ -n "$CLAMD_SOCKET" ]; then
-          if echo "PING" | nc -U "$CLAMD_SOCKET" | grep -q "PONG"; then
+          if clamdscan --version >/dev/null 2>&1; then
             echo "clamd daemon is already running and responsive"
             USE_EXISTING_CLAMD=true
           else
@@ -185,8 +192,11 @@ spec:
             timeout=$((timeout - 1))
           done
           
+          # Give daemon a moment to fully initialize
+          sleep 2
+          
           # Test connection
-          if ! echo "PING" | nc -U "$CLAMD_SOCKET" | grep -q "PONG"; then
+          if ! clamdscan --config-file=/tmp/clamd.conf --version >/dev/null 2>&1; then
             echo "ERROR: Unable to connect to clamd daemon"
             if [ -f /tmp/clamd.log ]; then
               echo "=== clamd.log ==="
@@ -294,7 +304,7 @@ spec:
               # Step 5: Launch clamdscan processes in parallel
               echo "Launching clamdscan processes..."
               for i in $(seq 0 $((threads - 1))); do
-                  LOGFILE="$HOME/logs/clamscan-result-$i-$arch.log"
+                  LOGFILE="/work/logs/clamscan-result-$i-$arch.log"
                   BUCKET_FILE="$HOME/file_bucket_$i.txt"
 
                   echo "Starting clamdscan on bucket $i..."
@@ -312,7 +322,7 @@ spec:
 
               echo "Waiting for all clamdscan processes to finish..."
               wait
-              echo "All scans completed. Logs are in: $HOME"
+              echo "All scans completed. Logs are in: /work/logs"
             fi
 
             digests_processed+=("\"$arch_sha\"")

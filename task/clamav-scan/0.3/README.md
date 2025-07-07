@@ -57,7 +57,7 @@ The task intelligently manages the ClamAV daemon:
 
 1. **Existing Daemon Detection**: Checks if `clamd` is already running
    - Searches common socket locations: `/var/run/clamd.scan/clamd.sock`, `/var/run/clamd.sock`, etc.
-   - Tests daemon responsiveness with PING/PONG
+   - Tests daemon responsiveness with clamdscan commands
    - Uses existing daemon if available and responsive
 
 2. **Automatic Fallback**: Starts its own daemon if needed
