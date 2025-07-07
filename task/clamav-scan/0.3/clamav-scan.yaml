@@ -93,22 +93,90 @@ spec:
         . /utils.sh
         trap 'handle_error $(results.TEST_OUTPUT.path)' EXIT
 
+        # Find the database directory
+        DB_DIR=""
+        for dir in /var/lib/clamav /usr/local/share/clamav /opt/clamav/share/clamav; do
+          if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+            DB_DIR="$dir"
+            break
+          fi
+        done
+        
+        if [ -z "$DB_DIR" ]; then
+          echo "ERROR: Could not find ClamAV database directory"
+          exit 1
+        fi
+        
+        echo "Using database directory: $DB_DIR"
+
+        # Create clamd configuration
+        echo "Creating clamd configuration..."
+        mkdir -p /tmp/clamd
+        cat > /tmp/clamd.conf << EOF
+LocalSocket /tmp/clamd.sock
+DatabaseDirectory $DB_DIR
+LogFile /tmp/clamd.log
+LogVerbose yes
+PidFile /tmp/clamd.pid
+User root
+MaxScanSize 4095M
+MaxFileSize 2000M
+MaxScanTime 0
+MaxFiles 0
+MaxRecursion 1000
+MaxDirectoryRecursion 20000
+MaxEmbeddedPE 4095M
+MaxHTMLNormalize 10M
+MaxHTMLNoTags 4095M
+MaxScriptNormalize 5M
+MaxZipTypeRcg 4095M
+MaxPartitions 50000
+MaxIconsPE 100000
+MaxRecHWP3 20000
+PCREMatchLimit 100000000
+PCRERecMatchLimit 2000000
+PCREMaxFileSize 4095M
+AlertExceedsMax yes
+AlertEncrypted yes
+AlertEncryptedArchive yes
+AlertEncryptedDoc yes
+AlertMacros yes
+AlertPhishingSSL yes
+AlertPhishingCloak yes
+AlertPartitionIntersection yes
+EOF
+
         # Start clamd daemon for improved performance
         echo "Starting clamd daemon..."
-        clamd &
+        clamd -c /tmp/clamd.conf &
         CLAMD_PID=$!
         
         # Wait for clamd to be ready
         echo "Waiting for clamd daemon to be ready..."
-        timeout=30
-        while ! clamdscan --version >/dev/null 2>&1; do
+        timeout=60
+        while ! test -S /tmp/clamd.sock; do
           if [ $timeout -le 0 ]; then
-            echo "ERROR: clamd daemon failed to start within 30 seconds"
+            echo "ERROR: clamd daemon failed to start within 60 seconds"
+            if [ -f /tmp/clamd.log ]; then
+              echo "=== clamd.log ==="
+              cat /tmp/clamd.log
+            fi
             exit 1
           fi
           sleep 1
           timeout=$((timeout - 1))
         done
+        
+        # Test connection
+        if ! clamdscan --config-file=/tmp/clamd.conf --version >/dev/null 2>&1; then
+          echo "ERROR: Unable to connect to clamd daemon"
+          if [ -f /tmp/clamd.log ]; then
+            echo "=== clamd.log ==="
+            cat /tmp/clamd.log
+          fi
+          exit 1
+        fi
+        
         echo "clamd daemon is ready"
 
         # Ensure clamd is stopped on exit
@@ -148,7 +216,7 @@ spec:
               exit 0
             fi
 
-            db_version=$(clamdscan --version | sed 's|.*/\(.*\)/.*|\1|')
+            db_version=$(clamdscan --config-file=/tmp/clamd.conf --version | sed 's|.*/\(.*\)/.*|\1|')
 
             if [[ "$threads" -eq 1 ]]; then
               # single-threaded so use the original task code
@@ -156,13 +224,7 @@ spec:
               # so the results processing later treats this as a single bucket log
               echo "Single-threaded mode detected."
               echo "Scanning image for arch $arch. This operation may take a while."
-              clamdscan "${destination}" --recursive --infected-only --max-scansize=4095M --max-filesize=2000M \
-                --max-scantime=0 --max-files=0 --max-recursion=1000 --max-dir-recursion=20000 --max-embeddedpe=4095M \
-                --max-htmlnormalize=10M --max-htmlnotags=4095M --max-scriptnormalize=5M --max-ziptypercg=4095M \
-                --max-partitions=50000 --max-iconspe=100000 --max-rechwp3=20000 --pcre-match-limit=100000000 --pcre-recmatch-limit=2000000 \
-                --pcre-max-filesize=4095M --alert-exceeds-max=yes \
-                --alert-encrypted=yes --alert-encrypted-archive=yes --alert-encrypted-doc=yes --alert-macros=yes \
-                --alert-phishing-ssl=yes --alert-phishing-cloak=yes --alert-partition-intersection=yes \
+              clamdscan --config-file=/tmp/clamd.conf --infected "${destination}" \
                 | tee "/work/logs/clamscan-result-1-$arch.log" || true
             else
               echo "Multi-threaded mode detected ($threads threads)."
@@ -207,13 +269,7 @@ spec:
 
                   echo "Starting clamdscan on bucket $i..."
 
-                  clamdscan --file-list="$BUCKET_FILE" --infected-only --max-scansize=4095M --max-filesize=2000M \
-                      --max-scantime=0 --max-files=0 --max-embeddedpe=4095M \
-                      --max-htmlnormalize=10M --max-htmlnotags=4095M --max-scriptnormalize=5M --max-ziptypercg=4095M \
-                      --max-partitions=50000 --max-iconspe=100000 --max-rechwp3=20000 --pcre-match-limit=100000000 --pcre-recmatch-limit=2000000 \
-                      --pcre-max-filesize=4095M --alert-exceeds-max=yes \
-                      --alert-encrypted=yes --alert-encrypted-archive=yes --alert-encrypted-doc=yes --alert-macros=yes \
-                      --alert-phishing-ssl=yes --alert-phishing-cloak=yes --alert-partition-intersection=yes \
+                  clamdscan --config-file=/tmp/clamd.conf --infected --file-list="$BUCKET_FILE" \
                       | tee "$LOGFILE" || true &
               done
 
@@ -227,7 +283,7 @@ spec:
             for logfile in /work/logs/clamscan-result-*-"$arch".log; do
               [ -e "$logfile" ] || continue  # skip if no matching files
 
-              echo "Executed-on: Scan was executed on clamdscan version - $(clamdscan --version) Database version: $db_version" | tee -a "$logfile"
+              echo "Executed-on: Scan was executed on clamdscan version - $(clamdscan --config-file=/tmp/clamd.conf --version) Database version: $db_version" | tee -a "$logfile"
 
               echo "Running EC on: $logfile"
               bucket_id=$(basename "$logfile" | sed -E 's/clamscan-result-([0-9]+)-.*\.log/\1/')
