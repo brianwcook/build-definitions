@@ -3,54 +3,45 @@ kind: Task
 metadata:
   labels:
     app.kubernetes.io/version: "0.3"
+    build.appstudio.redhat.com/build_type: "docker"
   annotations:
     tekton.dev/pipelines.minVersion: "0.12.1"
-    tekton.dev/tags: "virus, konflux"
+    tekton.dev/tags: "appstudio, hacbs"
   name: clamav-scan
 spec:
   description: >-
-    Scans the content of container images for viruses, malware, and other malicious content using ClamAV antivirus scanner with clamdscan daemon for improved performance.
-  results:
-    - name: TEST_OUTPUT
-      description: Tekton task test output.
-    - name: IMAGES_PROCESSED
-      description: Images processed in the task.
+    Scans the content of container images for viruses, malware, and other security threats using ClamAV.
+    This version uses clamdscan with the clamd daemon for improved performance through database caching.
   params:
-    - name: image-digest
-      description: Image digest to scan.
-    - name: image-url
-      description: Image URL.
-    - name: docker-auth
-      description: unused
-      default: ""
-    - name: ca-trust-config-map-name
+    - description: Image digest to scan.
+      name: image-digest
       type: string
-      description: The name of the ConfigMap to read CA bundle data from.
-      default: trusted-ca
-    - name: ca-trust-config-map-key
+    - description: Image URL.
+      name: image-url
       type: string
-      description: The name of the key in the ConfigMap that contains the CA bundle data.
-      default: ca-bundle.crt
-    - name: scan-threads
+    - description: Number of threads to run in clamdscan parallel. Should be <= 8.
+      name: scan-threads
       type: string
-      description: Number of threads to run in clamdscan parallel. Should be <= 8.
       default: "1"
-
+    - description: Maximum number of scan threads allowed.
+      name: max-scan-threads
+      type: string
+      default: "8"
+    - description: Configmap name holding the certificate bundle file.
+      name: ca-trust-config-map-name
+      type: string
+      default: trusted-ca
+    - description: The name of the key containing the certificate bundle file.
+      name: ca-trust-config-map-key
+      type: string
+      default: ca-bundle.crt
+  results:
+    - description: Images processed in the task.
+      name: IMAGES_PROCESSED
+    - description: Tekton task test output.
+      name: TEST_OUTPUT
   steps:
-    - name: extract-and-scan-image
-      # This image receives daily builds, ensuring we always have access to the latest virus definitions
-      image: quay.io/konflux-ci/clamav-db:latest
-      # per https://kubernetes.io/docs/concepts/containers/images/#imagepullpolicy-defaulting
-      # the cluster will set imagePullPolicy to IfNotPresent
-      workingDir: /work
-      # need to change user since 'oc image extract' requires more privileges when running as root permissions
-      # https://bugzilla.redhat.com/show_bug.cgi?id=1969929
-      securityContext:
-        capabilities:
-          add: ["SETFCAP"]
-      env:
-        - name: HOME
-          value: /work
+    - env:
         - name: IMAGE_URL
           value: $(params.image-url)
         - name: IMAGE_DIGEST
@@ -58,24 +49,33 @@ spec:
         - name: SCAN_THREADS
           value: $(params.scan-threads)
         - name: MAX_SCAN_THREADS
-          value: "8"
+          value: $(params.max-scan-threads)
+      image: quay.io/konflux-ci/clamav-db:latest
+      # per https://kubernetes.io/docs/concepts/containers/images/#imagepullpolicy-defaulting
+      # the cluster will set imagePullPolicy to IfNotPresent
+      # also per direction from Ralph Bean, we want to use image digest based tags to use a cue to automation like dependabot or renovatebot to periodically submit pull requests that update the digest as new images are released.
+      workingDir: /work
       computeResources:
         limits:
           memory: 16Gi
+          cpu: 2
         requests:
-          memory: 2Gi
-          cpu: 1
+          memory: 4Gi
+          cpu: 200m
       script: |
         #!/usr/bin/env bash
 
-        echo "SCAN_THREADS: $SCAN_THREADS"
+        # Parse and validate scan threads parameter
+        threads=${SCAN_THREADS:-1}
+        if ! [[ "$threads" =~ ^[0-9]+$ ]] || [ "$threads" -lt 1 ]; then
+          echo "ERROR: SCAN_THREADS must be a positive integer, got: '$threads'"
+          exit 1
+        fi
 
-        threads="${SCAN_THREADS:-1}"
-
-        # validate SCAN_THREADS is numeric
-        if ! [[ "$threads" =~ ^[0-9]+$ ]]; then
-          echo "[WARN] SCAN_THREADS not a positive integer. Setting threads to 1."
-          threads=1
+        MAX_SCAN_THREADS=${MAX_SCAN_THREADS:-8}
+        if ! [[ "$MAX_SCAN_THREADS" =~ ^[0-9]+$ ]] || [ "$MAX_SCAN_THREADS" -lt 1 ]; then
+          echo "ERROR: MAX_SCAN_THREADS must be a positive integer, got: '$MAX_SCAN_THREADS'"
+          exit 1
         fi
 
         # warning if SCAN_THREADS is greater than visible CPUs
@@ -93,86 +93,113 @@ spec:
         . /utils.sh
         trap 'handle_error $(results.TEST_OUTPUT.path)' EXIT
 
-        # Find the database directory
-        DB_DIR=""
-        for dir in /var/lib/clamav /usr/local/share/clamav /opt/clamav/share/clamav; do
-          if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
-            DB_DIR="$dir"
+        # Check if clamd is already running by looking for common socket locations
+        CLAMD_SOCKET=""
+        for socket in /var/run/clamd.scan/clamd.sock /var/run/clamd.sock /tmp/clamd.sock /var/lib/clamav/clamd.sock; do
+          if [ -S "$socket" ]; then
+            CLAMD_SOCKET="$socket"
+            echo "Found existing clamd socket at: $CLAMD_SOCKET"
             break
           fi
         done
-        
-        if [ -z "$DB_DIR" ]; then
-          echo "ERROR: Could not find ClamAV database directory"
-          exit 1
+
+        # Test if clamd is responsive
+        if [ -n "$CLAMD_SOCKET" ]; then
+          if echo "PING" | nc -U "$CLAMD_SOCKET" | grep -q "PONG"; then
+            echo "clamd daemon is already running and responsive"
+            USE_EXISTING_CLAMD=true
+          else
+            echo "Found socket but clamd not responsive, will start our own"
+            USE_EXISTING_CLAMD=false
+          fi
+        else
+          echo "No existing clamd socket found, will start our own"
+          USE_EXISTING_CLAMD=false
         fi
-        
-        echo "Using database directory: $DB_DIR"
 
-        # Create clamd configuration
-        echo "Creating clamd configuration..."
-        mkdir -p /tmp/clamd
-        {
-          echo "LocalSocket /tmp/clamd.sock"
-          echo "DatabaseDirectory \$DB_DIR"
-          echo "LogFile /tmp/clamd.log"
-          echo "LogVerbose yes"
-          echo "PidFile /tmp/clamd.pid"
-          echo "User root"
-          echo "MaxScanSize 4095M"
-          echo "MaxFileSize 2000M"
-          echo "MaxScanTime 0"
-          echo "MaxFiles 0"
-          echo "MaxRecursion 1000"
-          echo "MaxDirectoryRecursion 20000"
-          echo "MaxEmbeddedPE 4095M"
-          echo "MaxHTMLNormalize 10M"
-          echo "MaxHTMLNoTags 4095M"
-          echo "MaxScriptNormalize 5M"
-          echo "MaxZipTypeRcg 4095M"
-          echo "MaxPartitions 50000"
-          echo "MaxIconsPE 100000"
-          echo "MaxRecHWP3 20000"
-          echo "PCREMatchLimit 100000000"
-          echo "PCRERecMatchLimit 2000000"
-          echo "PCREMaxFileSize 4095M"
-        } > /tmp/clamd.conf
+        # Start our own clamd if needed
+        if [ "$USE_EXISTING_CLAMD" = "false" ]; then
+          echo "Starting clamd daemon for improved performance..."
+          
+          # Find the database directory
+          DB_DIR=""
+          for dir in /var/lib/clamav /usr/local/share/clamav /opt/clamav/share/clamav; do
+            if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+              DB_DIR="$dir"
+              break
+            fi
+          done
+          
+          if [ -z "$DB_DIR" ]; then
+            echo "ERROR: Could not find ClamAV database directory"
+            exit 1
+          fi
+          
+          echo "Using database directory: $DB_DIR"
 
-        # Start clamd daemon for improved performance
-        echo "Starting clamd daemon..."
-        clamd -c /tmp/clamd.conf &
-        CLAMD_PID=$!
-        
-        # Wait for clamd to be ready
-        echo "Waiting for clamd daemon to be ready..."
-        timeout=60
-        while ! test -S /tmp/clamd.sock; do
-          if [ $timeout -le 0 ]; then
-            echo "ERROR: clamd daemon failed to start within 60 seconds"
+          # Create clamd configuration
+          mkdir -p /tmp/clamd
+          CLAMD_SOCKET="/tmp/clamd.sock"
+          {
+            echo "LocalSocket $CLAMD_SOCKET"
+            echo "DatabaseDirectory $DB_DIR"
+            echo "LogFile /tmp/clamd.log"
+            echo "LogVerbose yes"
+            echo "PidFile /tmp/clamd.pid"
+            echo "User root"
+            echo "MaxScanSize 4095M"
+            echo "MaxFileSize 2000M"
+            echo "MaxScanTime 0"
+            echo "MaxFiles 0"
+            echo "MaxRecursion 1000"
+            echo "MaxDirectoryRecursion 20000"
+            echo "MaxEmbeddedPE 4095M"
+            echo "MaxHTMLNormalize 10M"
+            echo "MaxHTMLNoTags 4095M"
+            echo "MaxScriptNormalize 5M"
+            echo "MaxZipTypeRcg 4095M"
+            echo "MaxPartitions 50000"
+            echo "MaxIconsPE 100000"
+            echo "MaxRecHWP3 20000"
+            echo "PCREMatchLimit 100000000"
+            echo "PCRERecMatchLimit 2000000"
+            echo "PCREMaxFileSize 4095M"
+          } > /tmp/clamd.conf
+
+          clamd -c /tmp/clamd.conf &
+          CLAMD_PID=$!
+          
+          # Wait for clamd to be ready
+          echo "Waiting for clamd daemon to be ready..."
+          timeout=60
+          while ! test -S "$CLAMD_SOCKET"; do
+            if [ $timeout -le 0 ]; then
+              echo "ERROR: clamd daemon failed to start within 60 seconds"
+              if [ -f /tmp/clamd.log ]; then
+                echo "=== clamd.log ==="
+                cat /tmp/clamd.log
+              fi
+              exit 1
+            fi
+            sleep 1
+            timeout=$((timeout - 1))
+          done
+          
+          # Test connection
+          if ! echo "PING" | nc -U "$CLAMD_SOCKET" | grep -q "PONG"; then
+            echo "ERROR: Unable to connect to clamd daemon"
             if [ -f /tmp/clamd.log ]; then
               echo "=== clamd.log ==="
               cat /tmp/clamd.log
             fi
             exit 1
           fi
-          sleep 1
-          timeout=$((timeout - 1))
-        done
-        
-        # Test connection
-        if ! clamdscan --config-file=/tmp/clamd.conf --version >/dev/null 2>&1; then
-          echo "ERROR: Unable to connect to clamd daemon"
-          if [ -f /tmp/clamd.log ]; then
-            echo "=== clamd.log ==="
-            cat /tmp/clamd.log
-          fi
-          exit 1
+          
+          echo "clamd daemon is ready"
+          
+          # Ensure clamd is stopped on exit
+          trap 'kill $CLAMD_PID 2>/dev/null || true; handle_error $(results.TEST_OUTPUT.path)' EXIT
         fi
-        
-        echo "clamd daemon is ready"
-
-        # Ensure clamd is stopped on exit
-        trap 'kill $CLAMD_PID 2>/dev/null || true; handle_error $(results.TEST_OUTPUT.path)' EXIT
 
         imagewithouttag=$(echo $IMAGE_URL | sed "s/\(.*\):.*/\1/" | tr -d '\n')
 
@@ -208,30 +235,41 @@ spec:
               exit 0
             fi
 
-            db_version=$(clamdscan --config-file=/tmp/clamd.conf --version | sed 's|.*/\(.*\)/.*|\1|')
+            # Get database version from clamdscan
+            if [ "$USE_EXISTING_CLAMD" = "true" ]; then
+              # Use existing clamd, try without config file first
+              if clamdscan --version >/dev/null 2>&1; then
+                db_version=$(clamdscan --version | sed 's|.*/\(.*\)/.*|\1|')
+              else
+                # Fallback to clamscan for version
+                db_version=$(clamscan --version | sed 's|.*/\(.*\)/.*|\1|')
+              fi
+            else
+              # Use our custom config
+              db_version=$(clamdscan --config-file=/tmp/clamd.conf --version | sed 's|.*/\(.*\)/.*|\1|')
+            fi
 
             if [[ "$threads" -eq 1 ]]; then
-              # single-threaded so use the original task code
-              # no change, from the original except we hardcode a "-1-" to the logfile
-              # so the results processing later treats this as a single bucket log
+              # single-threaded mode
               echo "Single-threaded mode detected."
-              echo "Scanning image for arch $arch. This operation may take a while."
-              clamdscan --config-file=/tmp/clamd.conf --infected "${destination}" \
-                | tee "/work/logs/clamscan-result-1-$arch.log" || true
+              echo "Scanning image for arch $arch using clamdscan. This operation may take a while."
+              
+              if [ "$USE_EXISTING_CLAMD" = "true" ]; then
+                # Use existing clamd (try default socket)
+                clamdscan --infected "${destination}" \
+                  | tee "/work/logs/clamscan-result-1-$arch.log" || true
+              else
+                # Use our clamd with custom config
+                clamdscan --config-file=/tmp/clamd.conf --infected "${destination}" \
+                  | tee "/work/logs/clamscan-result-1-$arch.log" || true
+              fi
             else
               echo "Multi-threaded mode detected ($threads threads)."
 
               # Step 1: Generate complete manifest of all file paths in the destination and their sizes
-              # the paths names are sanitized to handle the following valid filenames:
-              #   1. spaces
-              #   2. newlines
-              #   3. special characters
               echo "Generating sanitized file list..."
               find "$destination" -type f -print0 | while IFS= read -r -d '' file; do
-                  # get the file size with stat this is used for sorting
                   size=$(stat -c "%s" "$file")
-
-                  # tsv format: <size>\t<path>
                   printf "%s\t%s\n" "$size" "$file"
               done >"$HOME/files_manifest.tsv"
 
@@ -241,10 +279,10 @@ spec:
 
               # Step 3: create empty bucket files based on scan-threads
               for i in $(seq 0 $((threads - 1))); do
-                  : >"$HOME/file_bucket_$i.txt" # Clear or create empty files
+                  : >"$HOME/file_bucket_$i.txt"
               done
 
-              # Step 3: Distribute files to buckets (round-robin), this should produce equally weighted buckets
+              # Step 4: Distribute files to buckets (round-robin)
               echo "Distributing files into $threads buckets..."
               i=0
               while IFS=$'\t' read -r size path; do
@@ -253,7 +291,7 @@ spec:
                   ((i = i + 1))
               done <"$HOME/files_manifest_sorted.tsv"
 
-              # Step 5: Launch clamdscan processes in parallel giving each process a file bucket to work on
+              # Step 5: Launch clamdscan processes in parallel
               echo "Launching clamdscan processes..."
               for i in $(seq 0 $((threads - 1))); do
                   LOGFILE="$HOME/logs/clamscan-result-$i-$arch.log"
@@ -261,8 +299,15 @@ spec:
 
                   echo "Starting clamdscan on bucket $i..."
 
-                  clamdscan --config-file=/tmp/clamd.conf --infected --file-list="$BUCKET_FILE" \
-                      | tee "$LOGFILE" || true &
+                  if [ "$USE_EXISTING_CLAMD" = "true" ]; then
+                    # Use existing clamd
+                    clamdscan --infected --file-list="$BUCKET_FILE" \
+                        | tee "$LOGFILE" || true &
+                  else
+                    # Use our clamd with custom config
+                    clamdscan --config-file=/tmp/clamd.conf --infected --file-list="$BUCKET_FILE" \
+                        | tee "$LOGFILE" || true &
+                  fi
               done
 
               echo "Waiting for all clamdscan processes to finish..."
@@ -273,13 +318,13 @@ spec:
             digests_processed+=("\"$arch_sha\"")
 
             for logfile in /work/logs/clamscan-result-*-"$arch".log; do
-              [ -e "$logfile" ] || continue  # skip if no matching files
+              [ -e "$logfile" ] || continue
 
-              echo "Executed-on: Scan was executed on clamdscan version - $(clamdscan --config-file=/tmp/clamd.conf --version) Database version: $db_version" | tee -a "$logfile"
+              echo "Executed-on: Scan was executed on clamdscan version - Database version: $db_version" | tee -a "$logfile"
 
               echo "Running EC on: $logfile"
               bucket_id=$(basename "$logfile" | sed -E 's/clamscan-result-([0-9]+)-.*\.log/\1/')
-              json_input="/work/logs/clamscan-result-$bucket_id-$arch.json"
+              json_input="/work/logs/clamsav-result-$bucket_id-$arch.json"
               json_output="/work/logs/clamscan-ec-test-$bucket_id-$arch.json"
 
               # Convert log to JSON format for EC
@@ -352,23 +397,21 @@ spec:
       workingDir: /work
       script: |
         #!/usr/bin/env bash
-        set -e
-
-        # Don't return a glob expression when no matches are found
-        shopt -s nullglob
 
         cd logs
 
         for UPLOAD_FILE in clamscan-result*.log; do
+          [ -e "$UPLOAD_FILE" ] || continue
           MEDIA_TYPE=text/vnd.clamav
           args+=("${UPLOAD_FILE}:${MEDIA_TYPE}")
         done
         for UPLOAD_FILE in clamscan-ec-test*.json; do
+          [ -e "$UPLOAD_FILE" ] || continue
           MEDIA_TYPE=application/vnd.konflux.test_output+json
           args+=("${UPLOAD_FILE}:${MEDIA_TYPE}")
         done
 
-        if [ -z "${args}" ]; then
+        if [ -z "${args[*]}" ]; then
           echo "No files found. Skipping upload."
           exit 0;
         fi
@@ -376,17 +419,11 @@ spec:
         echo "Selecting auth"
         select-oci-auth $IMAGE_URL > $HOME/auth.json
         echo "Attaching to ${IMAGE_URL}"
-         retry oras attach --no-tty --registry-config "$HOME/auth.json" --artifact-type application/vnd.clamav "${IMAGE_URL}@${IMAGE_DIGEST}" "${args[@]}"
+        retry oras attach --no-tty --registry-config "$HOME/auth.json" --artifact-type application/vnd.clamav "${IMAGE_URL}" "${args[@]}"
       volumeMounts:
         - mountPath: /work
           name: work
-        - name: trusted-ca
-          mountPath: /etc/pki/tls/certs/ca-custom-bundle.crt
-          subPath: ca-bundle.crt
-          readOnly: true
   volumes:
-    - name: dbfolder
-      emptyDir: {}
     - name: work
       emptyDir: {}
     - name: trusted-ca
