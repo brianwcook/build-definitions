@@ -136,14 +136,6 @@ spec:
           echo "PCREMatchLimit 100000000"
           echo "PCRERecMatchLimit 2000000"
           echo "PCREMaxFileSize 4095M"
-          echo "AlertExceedsMax yes"
-          echo "AlertEncrypted yes"
-          echo "AlertEncryptedArchive yes"
-          echo "AlertEncryptedDoc yes"
-          echo "AlertMacros yes"
-          echo "AlertPhishingSSL yes"
-          echo "AlertPhishingCloak yes"
-          echo "AlertPartitionIntersection yes"
         } > /tmp/clamd.conf
 
         # Start clamd daemon for improved performance
