@@ -112,39 +112,39 @@ spec:
         # Create clamd configuration
         echo "Creating clamd configuration..."
         mkdir -p /tmp/clamd
-        cat > /tmp/clamd.conf << 'EOF'
-        LocalSocket /tmp/clamd.sock
-        DatabaseDirectory $DB_DIR
-        LogFile /tmp/clamd.log
-        LogVerbose yes
-        PidFile /tmp/clamd.pid
-        User root
-        MaxScanSize 4095M
-        MaxFileSize 2000M
-        MaxScanTime 0
-        MaxFiles 0
-        MaxRecursion 1000
-        MaxDirectoryRecursion 20000
-        MaxEmbeddedPE 4095M
-        MaxHTMLNormalize 10M
-        MaxHTMLNoTags 4095M
-        MaxScriptNormalize 5M
-        MaxZipTypeRcg 4095M
-        MaxPartitions 50000
-        MaxIconsPE 100000
-        MaxRecHWP3 20000
-        PCREMatchLimit 100000000
-        PCRERecMatchLimit 2000000
-        PCREMaxFileSize 4095M
-        AlertExceedsMax yes
-        AlertEncrypted yes
-        AlertEncryptedArchive yes
-        AlertEncryptedDoc yes
-        AlertMacros yes
-        AlertPhishingSSL yes
-        AlertPhishingCloak yes
-        AlertPartitionIntersection yes
-        EOF
+        {
+          echo "LocalSocket /tmp/clamd.sock"
+          echo "DatabaseDirectory \$DB_DIR"
+          echo "LogFile /tmp/clamd.log"
+          echo "LogVerbose yes"
+          echo "PidFile /tmp/clamd.pid"
+          echo "User root"
+          echo "MaxScanSize 4095M"
+          echo "MaxFileSize 2000M"
+          echo "MaxScanTime 0"
+          echo "MaxFiles 0"
+          echo "MaxRecursion 1000"
+          echo "MaxDirectoryRecursion 20000"
+          echo "MaxEmbeddedPE 4095M"
+          echo "MaxHTMLNormalize 10M"
+          echo "MaxHTMLNoTags 4095M"
+          echo "MaxScriptNormalize 5M"
+          echo "MaxZipTypeRcg 4095M"
+          echo "MaxPartitions 50000"
+          echo "MaxIconsPE 100000"
+          echo "MaxRecHWP3 20000"
+          echo "PCREMatchLimit 100000000"
+          echo "PCRERecMatchLimit 2000000"
+          echo "PCREMaxFileSize 4095M"
+          echo "AlertExceedsMax yes"
+          echo "AlertEncrypted yes"
+          echo "AlertEncryptedArchive yes"
+          echo "AlertEncryptedDoc yes"
+          echo "AlertMacros yes"
+          echo "AlertPhishingSSL yes"
+          echo "AlertPhishingCloak yes"
+          echo "AlertPartitionIntersection yes"
+        } > /tmp/clamd.conf
 
         # Start clamd daemon for improved performance
         echo "Starting clamd daemon..."
