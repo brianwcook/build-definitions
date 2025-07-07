@@ -112,39 +112,39 @@ spec:
         # Create clamd configuration
         echo "Creating clamd configuration..."
         mkdir -p /tmp/clamd
-        cat > /tmp/clamd.conf << EOF
-LocalSocket /tmp/clamd.sock
-DatabaseDirectory $DB_DIR
-LogFile /tmp/clamd.log
-LogVerbose yes
-PidFile /tmp/clamd.pid
-User root
-MaxScanSize 4095M
-MaxFileSize 2000M
-MaxScanTime 0
-MaxFiles 0
-MaxRecursion 1000
-MaxDirectoryRecursion 20000
-MaxEmbeddedPE 4095M
-MaxHTMLNormalize 10M
-MaxHTMLNoTags 4095M
-MaxScriptNormalize 5M
-MaxZipTypeRcg 4095M
-MaxPartitions 50000
-MaxIconsPE 100000
-MaxRecHWP3 20000
-PCREMatchLimit 100000000
-PCRERecMatchLimit 2000000
-PCREMaxFileSize 4095M
-AlertExceedsMax yes
-AlertEncrypted yes
-AlertEncryptedArchive yes
-AlertEncryptedDoc yes
-AlertMacros yes
-AlertPhishingSSL yes
-AlertPhishingCloak yes
-AlertPartitionIntersection yes
-EOF
+        cat > /tmp/clamd.conf << 'EOF'
+        LocalSocket /tmp/clamd.sock
+        DatabaseDirectory $DB_DIR
+        LogFile /tmp/clamd.log
+        LogVerbose yes
+        PidFile /tmp/clamd.pid
+        User root
+        MaxScanSize 4095M
+        MaxFileSize 2000M
+        MaxScanTime 0
+        MaxFiles 0
+        MaxRecursion 1000
+        MaxDirectoryRecursion 20000
+        MaxEmbeddedPE 4095M
+        MaxHTMLNormalize 10M
+        MaxHTMLNoTags 4095M
+        MaxScriptNormalize 5M
+        MaxZipTypeRcg 4095M
+        MaxPartitions 50000
+        MaxIconsPE 100000
+        MaxRecHWP3 20000
+        PCREMatchLimit 100000000
+        PCRERecMatchLimit 2000000
+        PCREMaxFileSize 4095M
+        AlertExceedsMax yes
+        AlertEncrypted yes
+        AlertEncryptedArchive yes
+        AlertEncryptedDoc yes
+        AlertMacros yes
+        AlertPhishingSSL yes
+        AlertPhishingCloak yes
+        AlertPartitionIntersection yes
+        EOF
 
         # Start clamd daemon for improved performance
         echo "Starting clamd daemon..."
