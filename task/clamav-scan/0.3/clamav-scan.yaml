@@ -367,45 +367,47 @@ spec:
                   : >"$HOME/file_bucket_$i.txt"
               done
 
-              # Step 4: Intelligent file distribution for optimal load balancing
+              # Step 4: Optimized file distribution for load balancing
               echo "Distributing files across $threads buckets for optimal load balancing..."
-              # Use largest-fit-decreasing algorithm for better balance
-              python3 -c "
-import sys
-from collections import defaultdict
-
-buckets = defaultdict(list)
-bucket_sizes = defaultdict(int)
-thread_count = $threads
-
-with open('$HOME/files_manifest_sorted.tsv', 'r') as f:
-    for line in f:
-        if line.strip():
-            size, path = line.strip().split('\t', 1)
-            size = int(size)
-            # Find bucket with smallest total size (load balancing)
-            min_bucket = min(range(thread_count), key=lambda x: bucket_sizes[x])
-            buckets[min_bucket].append(path)
-            bucket_sizes[min_bucket] += size
-
-# Write buckets to files
-for i in range(thread_count):
-    with open(f'$HOME/file_bucket_{i}.txt', 'w') as f:
-        for path in buckets[i]:
-            f.write(path + '\n')
-            
-print(f'Load balancing complete:')
-for i in range(thread_count):
-    print(f'  Bucket {i}: {len(buckets[i])} files, {bucket_sizes[i]/1024/1024:.1f} MB')
-" 2>/dev/null || {
-                # Fallback to simple round-robin if Python is not available
-                i=0
-                while IFS=$'\t' read -r size path; do
-                    bucket=$((i % threads))
-                    echo "$path" >>"$HOME/file_bucket_$bucket.txt"
-                    ((i = i + 1))
-                done <"$HOME/files_manifest_sorted.tsv"
-              }
+              
+              # Initialize bucket size tracking
+              for i in $(seq 0 $((threads - 1))); do
+                  echo "0" > "$HOME/bucket_size_$i.txt"
+              done
+              
+              # Distribute files using largest-fit-decreasing for better balance
+              while IFS=$'\t' read -r size path; do
+                  [ -n "$size" ] && [ -n "$path" ] || continue
+                  
+                  # Find bucket with smallest current size
+                  min_bucket=0
+                  min_size=$(cat "$HOME/bucket_size_0.txt")
+                  
+                  for i in $(seq 1 $((threads - 1))); do
+                      current_size=$(cat "$HOME/bucket_size_$i.txt")
+                      if [ "$current_size" -lt "$min_size" ]; then
+                          min_size=$current_size
+                          min_bucket=$i
+                      fi
+                  done
+                  
+                  # Add file to the smallest bucket
+                  echo "$path" >> "$HOME/file_bucket_$min_bucket.txt"
+                  
+                  # Update bucket size
+                  new_size=$((min_size + size))
+                  echo "$new_size" > "$HOME/bucket_size_$min_bucket.txt"
+                  
+              done < "$HOME/files_manifest_sorted.tsv"
+              
+              # Display load balancing results
+              echo "Load balancing complete:"
+              for i in $(seq 0 $((threads - 1))); do
+                  file_count=$(wc -l < "$HOME/file_bucket_$i.txt" 2>/dev/null || echo "0")
+                  bucket_size=$(cat "$HOME/bucket_size_$i.txt")
+                  size_mb=$((bucket_size / 1024 / 1024))
+                  echo "  Bucket $i: $file_count files, ${size_mb} MB"
+              done
 
               # Step 5: Launch optimized clamdscan processes in parallel
               echo "Launching $threads optimized clamdscan processes..."
@@ -437,7 +439,7 @@ for i in range(thread_count):
 
               echo "Waiting for all $threads clamdscan processes to complete..."
               # Monitor progress every 30 seconds
-              while jobs %% >/dev/null 2>&1; do
+              while jobs | grep -q Running; do
                 echo "$(date): Scanning in progress... $(jobs -r | wc -l) processes still running"
                 sleep 30
               done
