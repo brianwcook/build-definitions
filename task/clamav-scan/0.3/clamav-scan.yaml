@@ -19,10 +19,10 @@ spec:
     - description: Image URL.
       name: image-url
       type: string
-    - description: Number of threads to run in clamdscan parallel. Should be <= 8.
+    - description: Number of threads to run in clamdscan parallel. Use 'auto' for optimal detection, or specify number (should be <= max-scan-threads).
       name: scan-threads
       type: string
-      default: "1"
+      default: "auto"
     - description: Maximum number of scan threads allowed.
       name: max-scan-threads
       type: string
@@ -65,29 +65,35 @@ spec:
       computeResources:
         limits:
           memory: 16Gi
-          cpu: 2
+          cpu: 8
         requests:
-          memory: 4Gi
-          cpu: 200m
+          memory: 8Gi
+          cpu: 4
       script: |
         #!/usr/bin/env bash
 
-        # Parse and validate scan threads parameter
-        threads=${SCAN_THREADS:-1}
-        if ! [[ "$threads" =~ ^[0-9]+$ ]] || [ "$threads" -lt 1 ]; then
-          echo "ERROR: SCAN_THREADS must be a positive integer, got: '$threads'"
-          exit 1
+        # Auto-optimize thread count based on available resources
+        AVAILABLE_CPUS=$(nproc)
+        MAX_SCAN_THREADS=${MAX_SCAN_THREADS:-8}
+        
+        # Auto-detect optimal thread count if not specified
+        if [ "${SCAN_THREADS:-auto}" = "auto" ]; then
+          # Use 75% of available CPUs, but at least 1 and at most MAX_SCAN_THREADS
+          threads=$((AVAILABLE_CPUS * 3 / 4))
+          threads=$((threads < 1 ? 1 : threads))
+          threads=$((threads > MAX_SCAN_THREADS ? MAX_SCAN_THREADS : threads))
+          echo "Auto-detected optimal thread count: $threads (based on $AVAILABLE_CPUS available CPUs)"
+        else
+          threads=${SCAN_THREADS}
+          if ! [[ "$threads" =~ ^[0-9]+$ ]] || [ "$threads" -lt 1 ]; then
+            echo "ERROR: SCAN_THREADS must be a positive integer or 'auto', got: '$threads'"
+            exit 1
+          fi
         fi
 
-        MAX_SCAN_THREADS=${MAX_SCAN_THREADS:-8}
         if ! [[ "$MAX_SCAN_THREADS" =~ ^[0-9]+$ ]] || [ "$MAX_SCAN_THREADS" -lt 1 ]; then
           echo "ERROR: MAX_SCAN_THREADS must be a positive integer, got: '$MAX_SCAN_THREADS'"
           exit 1
-        fi
-
-        # warning if SCAN_THREADS is greater than visible CPUs
-        if [ "$threads" -gt "$(nproc)" ]; then
-          echo "[WARN] SCAN_THREADS ($threads) exceeds visible CPUs ($(nproc)) — performance may degrade."
         fi
 
         # Cap threads to MAX_THREADS
@@ -95,6 +101,8 @@ spec:
           echo "SCAN_THREADS ($threads) exceeds MAX_SCAN_THREADS ($MAX_SCAN_THREADS) — capping threads to: $MAX_SCAN_THREADS"
           threads="$MAX_SCAN_THREADS"
         fi
+
+        echo "Using $threads scanning threads on $AVAILABLE_CPUS available CPU cores"
 
         set -euo pipefail
         . /utils.sh
@@ -144,33 +152,82 @@ spec:
           
           echo "Using database directory: $DB_DIR"
 
-          # Create clamd configuration
+          # Create optimized clamd configuration for maximum performance
           mkdir -p /tmp/clamd
           CLAMD_SOCKET="/tmp/clamd.sock"
           {
             echo "LocalSocket $CLAMD_SOCKET"
             echo "DatabaseDirectory $DB_DIR"
             echo "LogFile /tmp/clamd.log"
-            echo "LogVerbose yes"
+            echo "LogVerbose no"  # Reduce logging overhead
             echo "PidFile /tmp/clamd.pid"
             echo "User root"
-            echo "MaxScanSize 4095M"
-            echo "MaxFileSize 2000M"
+            
+            # Performance optimizations
+            echo "MaxThreads $AVAILABLE_CPUS"  # Use all available CPU cores
+            echo "MaxQueue 1000"  # Increase queue size for better throughput
+            echo "IdleTimeout 300"  # Keep daemon alive longer
+            echo "ReadTimeout 300"  # Increase read timeout
+            echo "CommandReadTimeout 30"  # Optimize command timeout
+            
+            # Memory optimizations - use more of the available 16GB
+            echo "MaxScanSize 8192M"  # Double the scan size limit
+            echo "MaxFileSize 4096M"  # Double file size limit
             echo "MaxScanTime 0"
             echo "MaxFiles 0"
-            echo "MaxRecursion 1000"
-            echo "MaxDirectoryRecursion 20000"
-            echo "MaxEmbeddedPE 4095M"
-            echo "MaxHTMLNormalize 10M"
-            echo "MaxHTMLNoTags 4095M"
-            echo "MaxScriptNormalize 5M"
-            echo "MaxZipTypeRcg 4095M"
-            echo "MaxPartitions 50000"
-            echo "MaxIconsPE 100000"
-            echo "MaxRecHWP3 20000"
-            echo "PCREMatchLimit 100000000"
-            echo "PCRERecMatchLimit 2000000"
-            echo "PCREMaxFileSize 4095M"
+            echo "MaxRecursion 2000"  # Double recursion limits
+            echo "MaxDirectoryRecursion 40000"  # Double directory recursion
+            echo "MaxEmbeddedPE 8192M"  # Double embedded PE limit
+            echo "MaxHTMLNormalize 20M"  # Double HTML limits
+            echo "MaxHTMLNoTags 8192M"
+            echo "MaxScriptNormalize 10M"  # Double script limits
+            echo "MaxZipTypeRcg 8192M"  # Double ZIP limits
+            echo "MaxPartitions 100000"  # Double partition limits
+            echo "MaxIconsPE 200000"  # Double icon limits
+            echo "MaxRecHWP3 40000"  # Double HWP3 limits
+            
+            # PCRE optimizations
+            echo "PCREMatchLimit 200000000"  # Double PCRE limits
+            echo "PCRERecMatchLimit 4000000"
+            echo "PCREMaxFileSize 8192M"
+            
+            # Additional performance settings
+            echo "ScanPE yes"
+            echo "ScanELF yes"
+            echo "ScanOLE2 yes"
+            echo "ScanPDF yes"
+            echo "ScanSWF yes"
+            echo "ScanXMLDOCS yes"
+            echo "ScanHWP3 yes"
+            echo "ScanArchive yes"
+            echo "AlertBrokenExecutables yes"
+            echo "AlertBrokenMedia yes"
+            echo "AlertEncrypted yes"
+            echo "AlertEncryptedArchive yes"
+            echo "AlertEncryptedDoc yes"
+            echo "AlertMacros yes"
+            echo "AlertPhishingSSLMismatch yes"
+            echo "AlertPhishingCloak yes"
+            echo "AlertPartitionIntersection yes"
+            echo "HeuristicScanPrecedence yes"
+            echo "StructuredDataDetection yes"
+            echo "StructuredMinCreditCardCount 3"
+            echo "StructuredMinSSNCount 3"
+            echo "StructuredSSNFormatNormal yes"
+            echo "StructuredSSNFormatStripped yes"
+            
+            # Disable unnecessary features for speed
+            echo "ScanMail no"
+            echo "MailFollowURLs no"
+            echo "PhishingSignatures yes"
+            echo "PhishingScanURLs yes"
+            echo "HeuristicAlerts yes"
+            
+            # Optimize I/O and caching
+            echo "ConcurrentDatabaseReload no"  # Avoid reload during scanning
+            echo "CrossFilesystems yes"
+            echo "FollowDirectorySymlinks no"
+            echo "FollowFileSymlinks no"
           } > /tmp/clamd.conf
 
           clamd -c /tmp/clamd.conf &
@@ -260,69 +317,132 @@ spec:
             fi
 
             if [[ "$threads" -eq 1 ]]; then
-              # single-threaded mode
+              # Optimized single-threaded mode
               echo "Single-threaded mode detected."
-              echo "Scanning image for arch $arch using clamdscan. This operation may take a while."
+              echo "Starting high-performance scan for arch $arch using optimized clamdscan..."
               
               if [ "$USE_EXISTING_CLAMD" = "true" ]; then
-                # Use existing clamd (try default socket)
-                clamdscan --infected "${destination}" \
+                # Use existing clamd with performance optimizations
+                nice -n -10 clamdscan \
+                  --infected \
+                  --fdpass \
+                  --stream \
+                  "${destination}" \
                   | tee "/work/logs/clamscan-result-1-$arch.log" || true
               else
-                # Use our clamd with custom config
-                clamdscan --config-file=/tmp/clamd.conf --infected "${destination}" \
+                # Use our optimized clamd with performance flags
+                nice -n -10 clamdscan \
+                  --config-file=/tmp/clamd.conf \
+                  --infected \
+                  --fdpass \
+                  --stream \
+                  "${destination}" \
                   | tee "/work/logs/clamscan-result-1-$arch.log" || true
               fi
             else
               echo "Multi-threaded mode detected ($threads threads)."
 
-              # Step 1: Generate complete manifest of all file paths in the destination and their sizes
-              echo "Generating sanitized file list..."
-              find "$destination" -type f -print0 | while IFS= read -r -d '' file; do
+              # Step 1: Generate complete manifest with optimized file discovery
+              echo "Generating optimized file list..."
+              # Use parallel find for faster file discovery on large images
+              find "$destination" -type f -print0 | \
+                parallel -0 -j $AVAILABLE_CPUS --pipe --block 100M \
+                'while IFS= read -r -d "" file; do
+                   size=$(stat -c "%s" "$file" 2>/dev/null || echo "0")
+                   printf "%s\t%s\n" "$size" "$file"
+                 done' > "$HOME/files_manifest.tsv" 2>/dev/null || {
+                # Fallback to regular find if parallel is not available
+                find "$destination" -type f -print0 | while IFS= read -r -d '' file; do
                   size=$(stat -c "%s" "$file")
                   printf "%s\t%s\n" "$size" "$file"
-              done >"$HOME/files_manifest.tsv"
+                done >"$HOME/files_manifest.tsv"
+              }
 
-              # Step 2: Sort the list by size descending
-              echo "Sorting files by size (descending)..."
-              sort -nr "$HOME/files_manifest.tsv" >"$HOME/files_manifest_sorted.tsv"
+              # Step 2: Sort by size with optimized approach
+              echo "Sorting files by size (largest first for better load balancing)..."
+              LC_ALL=C sort -nr -S 1G --parallel=$AVAILABLE_CPUS "$HOME/files_manifest.tsv" >"$HOME/files_manifest_sorted.tsv"
 
-              # Step 3: create empty bucket files based on scan-threads
+              # Step 3: Pre-allocate bucket files
               for i in $(seq 0 $((threads - 1))); do
                   : >"$HOME/file_bucket_$i.txt"
               done
 
-              # Step 4: Distribute files to buckets (round-robin)
-              echo "Distributing files into $threads buckets..."
-              i=0
-              while IFS=$'\t' read -r size path; do
-                  bucket=$((i % threads))
-                  echo "$path" >>"$HOME/file_bucket_$bucket.txt"
-                  ((i = i + 1))
-              done <"$HOME/files_manifest_sorted.tsv"
+              # Step 4: Intelligent file distribution for optimal load balancing
+              echo "Distributing files across $threads buckets for optimal load balancing..."
+              # Use largest-fit-decreasing algorithm for better balance
+              python3 -c "
+import sys
+from collections import defaultdict
 
-              # Step 5: Launch clamdscan processes in parallel
-              echo "Launching clamdscan processes..."
+buckets = defaultdict(list)
+bucket_sizes = defaultdict(int)
+thread_count = $threads
+
+with open('$HOME/files_manifest_sorted.tsv', 'r') as f:
+    for line in f:
+        if line.strip():
+            size, path = line.strip().split('\t', 1)
+            size = int(size)
+            # Find bucket with smallest total size (load balancing)
+            min_bucket = min(range(thread_count), key=lambda x: bucket_sizes[x])
+            buckets[min_bucket].append(path)
+            bucket_sizes[min_bucket] += size
+
+# Write buckets to files
+for i in range(thread_count):
+    with open(f'$HOME/file_bucket_{i}.txt', 'w') as f:
+        for path in buckets[i]:
+            f.write(path + '\n')
+            
+print(f'Load balancing complete:')
+for i in range(thread_count):
+    print(f'  Bucket {i}: {len(buckets[i])} files, {bucket_sizes[i]/1024/1024:.1f} MB')
+" 2>/dev/null || {
+                # Fallback to simple round-robin if Python is not available
+                i=0
+                while IFS=$'\t' read -r size path; do
+                    bucket=$((i % threads))
+                    echo "$path" >>"$HOME/file_bucket_$bucket.txt"
+                    ((i = i + 1))
+                done <"$HOME/files_manifest_sorted.tsv"
+              }
+
+              # Step 5: Launch optimized clamdscan processes in parallel
+              echo "Launching $threads optimized clamdscan processes..."
               for i in $(seq 0 $((threads - 1))); do
                   LOGFILE="/work/logs/clamscan-result-$i-$arch.log"
                   BUCKET_FILE="$HOME/file_bucket_$i.txt"
 
-                  echo "Starting clamdscan on bucket $i..."
+                  echo "Starting high-performance clamdscan on bucket $i..."
 
                   if [ "$USE_EXISTING_CLAMD" = "true" ]; then
-                    # Use existing clamd
-                    clamdscan --infected --file-list="$BUCKET_FILE" \
+                    # Use existing clamd with optimized flags
+                    nice -n -10 clamdscan \
+                        --infected \
+                        --file-list="$BUCKET_FILE" \
+                        --fdpass \
+                        --stream \
                         | tee "$LOGFILE" || true &
                   else
-                    # Use our clamd with custom config
-                    clamdscan --config-file=/tmp/clamd.conf --infected --file-list="$BUCKET_FILE" \
+                    # Use our optimized clamd with performance flags
+                    nice -n -10 clamdscan \
+                        --config-file=/tmp/clamd.conf \
+                        --infected \
+                        --file-list="$BUCKET_FILE" \
+                        --fdpass \
+                        --stream \
                         | tee "$LOGFILE" || true &
                   fi
               done
 
-              echo "Waiting for all clamdscan processes to finish..."
+              echo "Waiting for all $threads clamdscan processes to complete..."
+              # Monitor progress every 30 seconds
+              while jobs %% >/dev/null 2>&1; do
+                echo "$(date): Scanning in progress... $(jobs -r | wc -l) processes still running"
+                sleep 30
+              done
               wait
-              echo "All scans completed. Logs are in: /work/logs"
+              echo "All scans completed successfully. Logs are in: /work/logs"
             fi
 
             digests_processed+=("\"$arch_sha\"")

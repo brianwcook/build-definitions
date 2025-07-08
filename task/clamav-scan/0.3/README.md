@@ -126,16 +126,49 @@ Supports multi-architecture images:
 - **Comprehensive Scanning**: Detects viruses, malware, and threats
 - **Custom Whitelisting**: Filters known false positives
 
-## Performance Recommendations
+## Performance Optimizations
 
-- **Single-threaded** (default): Good for small to medium images
-- **Multi-threaded** (2-4 threads): Recommended for large images or containers with many files
-- **Memory allocation**: 4GB+ recommended for optimal performance
-- **CPU allocation**: 2+ cores for multi-threaded scanning
+### Auto-Threading
+- **Default**: Uses `auto` to detect optimal thread count (75% of available CPUs)
+- **Manual Override**: Specify exact thread count if needed
+- **Smart Scaling**: Automatically adapts to container resources
+
+### Resource Utilization
+- **Memory**: Optimized for 16GB containers with increased limits
+- **CPU**: Scales up to 8 CPU cores with enhanced performance
+- **I/O**: Parallel file discovery and intelligent load balancing
+- **Priority**: Uses `nice -n -10` for higher process priority
+
+### Advanced Features
+- **Intelligent Load Balancing**: Files distributed by size for optimal performance
+- **Parallel File Discovery**: Uses GNU parallel when available for faster file enumeration
+- **Optimized Sorting**: Multi-threaded sorting with increased memory buffer
+- **Stream Processing**: Uses `--fdpass` and `--stream` for faster data transfer
+- **Progress Monitoring**: Real-time status updates during long scans
+
+### Performance Recommendations
+
+- **Auto-threading** (default): Optimal for all scenarios, auto-detects best configuration
+- **High-CPU environments**: Will automatically use up to 8 threads
+- **Memory allocation**: Optimized for 16GB+ containers
+- **CPU allocation**: Scales from 4-8 cores for maximum performance
 
 ## Example Usage
 
 ```yaml
+# Auto-optimized scanning (recommended)
+- name: clamav-scan
+  taskRef:
+    name: clamav-scan
+    kind: Task
+  params:
+    - name: image-url
+      value: $(params.output-image)
+    - name: image-digest
+      value: $(tasks.build-image.results.IMAGE_DIGEST)
+    # scan-threads: "auto" is the default - automatically detects optimal thread count
+
+# Manual thread configuration (if needed)
 - name: clamav-scan
   taskRef:
     name: clamav-scan
@@ -146,7 +179,9 @@ Supports multi-architecture images:
     - name: image-digest
       value: $(tasks.build-image.results.IMAGE_DIGEST)
     - name: scan-threads
-      value: "4"  # Use 4 threads for faster scanning
+      value: "6"  # Manually specify thread count
+    - name: max-scan-threads
+      value: "8"  # Override maximum threads if needed
 ```
 
 ## Troubleshooting
